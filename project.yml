@@ -45,3 +45,29 @@ targets:
       path: PollenCast/PollenCast.entitlements
       properties:
         com.apple.developer.weatherkit: true
+
+  PollenCastTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: PollenCastTests
+    dependencies:
+      - target: PollenCast
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pollencast.app.tests
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: true
+
+  PollenCastUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: PollenCastUITests
+    dependencies:
+      - target: PollenCast
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pollencast.app.uitests
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: true
