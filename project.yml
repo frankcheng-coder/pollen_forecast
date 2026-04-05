@@ -5,11 +5,6 @@ options:
     iOS: "17.0"
   xcodeVersion: "16.0"
 
-settings:
-  base:
-    INFOPLIST_FILE: PollenCast/Info.plist
-    GENERATE_INFOPLIST_FILE: false
-
 configs:
   Debug: debug
   Release: release
@@ -27,14 +22,32 @@ targets:
         excludes:
           - "Configuration/*.xcconfig"
           - "Info.plist"
+    info:
+      path: PollenCast/Info.plist
+      properties:
+        CFBundleDisplayName: PollenCast
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundlePackageType: APPL
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSLocationWhenInUseUsageDescription: "PollenCast uses your location to show real-time pollen levels and weather for your area."
+        GOOGLE_POLLEN_API_KEY: $(GOOGLE_POLLEN_API_KEY)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pollencast.app
+        PRODUCT_NAME: PollenCast
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: 1
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: false
+        GENERATE_INFOPLIST_FILE: false
         INFOPLIST_FILE: PollenCast/Info.plist
       configs:
         Debug:
