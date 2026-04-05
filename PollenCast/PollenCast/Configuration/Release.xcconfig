@@ -1,0 +1,3 @@
+// Release configuration
+// TODO: Add your actual Google Pollen API key here
+GOOGLE_POLLEN_API_KEY = YOUR_GOOGLE_POLLEN_API_KEY_HERE
