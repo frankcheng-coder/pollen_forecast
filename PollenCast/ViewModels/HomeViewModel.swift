@@ -1,6 +1,9 @@
 import Foundation
 import CoreLocation
 import Combine
+import OSLog
+
+private let logger = Logger(subsystem: "com.pollencast.app", category: "HomeVM")
 
 // MARK: - Home View Model
 
@@ -15,8 +18,9 @@ final class HomeViewModel: ObservableObject {
     @Published var weatherContext: WeatherContext?
     @Published var recommendation: RecommendationSummary?
     @Published var isLoading = false
-    @Published var error: String?
+    @Published var pollenError: String?
     @Published var lastUpdated: Date?
+    @Published var debugInfo: PollenDebugInfo?
 
     // MARK: - Dependencies
 
@@ -31,7 +35,7 @@ final class HomeViewModel: ObservableObject {
     init(
         locationService: LocationService,
         pollenService: PollenAPIServiceProtocol = PollenAPIService(),
-        weatherService: WeatherServiceProtocol = MockWeatherService(), // TODO: Switch to WeatherKitService when entitlement is configured
+        weatherService: WeatherServiceProtocol = MockWeatherService(),
         cacheService: CacheService = .shared
     ) {
         self.locationService = locationService
@@ -77,22 +81,21 @@ final class HomeViewModel: ObservableObject {
 
     func loadData(for coordinate: CLLocationCoordinate2D) async {
         isLoading = true
-        error = nil
+        pollenError = nil
 
         async let pollenResult = loadPollen(for: coordinate)
         async let weatherResult = loadWeather(for: coordinate)
 
-        let (pollenOk, weatherOk) = await (pollenResult, weatherResult)
+        let (_, _) = await (pollenResult, weatherResult)
 
-        if !pollenOk && !weatherOk {
-            error = "Unable to load data. Pull to refresh."
-        }
-
-        // Generate recommendation from whatever data we have
+        // Only generate recommendation when we actually have pollen data
         recommendation = RecommendationEngine.generate(
             pollen: pollenSnapshot,
             weather: weatherContext
         )
+
+        // Update debug info from service
+        debugInfo = pollenService.lastDebugInfo
 
         lastUpdated = Date()
         isLoading = false
@@ -100,7 +103,6 @@ final class HomeViewModel: ObservableObject {
 
     func refresh() async {
         guard let location = locationService.currentLocation else {
-            // Try requesting location again
             locationService.requestCurrentLocation()
             return
         }
@@ -129,10 +131,17 @@ final class HomeViewModel: ObservableObject {
                     typeBreakdowns: today.typeBreakdowns,
                     dominantType: today.dominantType
                 )
+            } else {
+                pollenSnapshot = nil
+                pollenError = "Pollen API returned no daily data"
+                logger.warning("Pollen forecast had 0 days")
             }
             return true
         } catch {
-            self.error = error.localizedDescription
+            logger.error("Pollen load failed: \(error)")
+            pollenSnapshot = nil
+            pollenForecast = nil
+            pollenError = error.localizedDescription
             return false
         }
     }
@@ -143,7 +152,6 @@ final class HomeViewModel: ObservableObject {
             weatherContext = try await weatherService.fetchCurrentWeather(for: coordinate)
             return true
         } catch {
-            // Weather is supplementary — don't block on failure
             return false
         }
     }

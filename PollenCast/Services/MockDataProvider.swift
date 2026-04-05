@@ -109,7 +109,7 @@ enum MockDataProvider {
         RecommendationEngine.generate(
             pollen: mockPollenSnapshot(),
             weather: mockWeatherContext()
-        )
+        )!
     }
 
     // MARK: - Location

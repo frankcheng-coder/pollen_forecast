@@ -4,8 +4,10 @@ import Foundation
 
 struct RecommendationEngine {
 
-    static func generate(pollen: PollenSnapshot?, weather: WeatherContext?) -> RecommendationSummary {
-        let pollenRisk = pollen?.overallRiskLevel ?? .none
+    static func generate(pollen: PollenSnapshot?, weather: WeatherContext?) -> RecommendationSummary? {
+        // Don't generate misleading guidance when pollen data is missing
+        guard let pollen else { return nil }
+        let pollenRisk = pollen.overallRiskLevel
         let windSpeed = weather?.windSpeed ?? 0
         let rainChance = weather?.precipitationChance ?? 0
         let isWindy = windSpeed > 25

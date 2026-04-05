@@ -1,6 +1,7 @@
 import Foundation
 
 // MARK: - Google Pollen API Response DTOs
+// All fields are optional to tolerate partial responses from the API.
 
 /// Response from Google Pollen API /forecast:lookup endpoint
 struct GooglePollenResponse: Codable {
@@ -29,18 +30,18 @@ struct GooglePollenDate: Codable {
 }
 
 struct GooglePollenTypeInfo: Codable {
-    let code: String // "TREE", "GRASS", "WEED"
-    let displayName: String
+    let code: String
+    let displayName: String?
     let indexInfo: GooglePollenIndexInfo?
     let healthRecommendations: [String]?
     let inSeason: Bool?
 }
 
 struct GooglePollenIndexInfo: Codable {
-    let code: String // "UPI" (Universal Pollen Index)
-    let displayName: String
+    let code: String?
+    let displayName: String?
     let value: Int?
-    let category: String // "NONE", "LOW", "MODERATE", "HIGH", "VERY_HIGH"
+    let category: String?
     let indexDescription: String?
     let color: GooglePollenColor?
 }
@@ -53,8 +54,8 @@ struct GooglePollenColor: Codable {
 }
 
 struct GooglePlantInfo: Codable {
-    let code: String
-    let displayName: String
+    let code: String?
+    let displayName: String?
     let indexInfo: GooglePollenIndexInfo?
     let plantDescription: PlantDescription?
     let inSeason: Bool?

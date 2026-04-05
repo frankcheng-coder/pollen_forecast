@@ -1,24 +1,43 @@
 import Foundation
 import CoreLocation
+import OSLog
+
+private let logger = Logger(subsystem: "com.pollencast.app", category: "PollenAPI")
 
 // MARK: - Pollen API Error
 
 enum PollenAPIError: LocalizedError {
     case invalidURL
     case networkError(Error)
-    case decodingError(Error)
+    case decodingError(Error, responseBody: String)
+    case httpError(statusCode: Int, body: String)
     case noData
     case apiKeyMissing
+    case apiKeyPlaceholder
 
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "Invalid API URL"
         case .networkError(let error): return "Network error: \(error.localizedDescription)"
-        case .decodingError(let error): return "Data parsing error: \(error.localizedDescription)"
+        case .decodingError(let error, _): return "Data parsing error: \(error.localizedDescription)"
+        case .httpError(let code, let body): return "HTTP \(code): \(body.prefix(200))"
         case .noData: return "No pollen data available for this location"
         case .apiKeyMissing: return "Google Pollen API key is not configured"
+        case .apiKeyPlaceholder: return "Google Pollen API key is still the placeholder. Set a real key in Debug.xcconfig."
         }
     }
+}
+
+// MARK: - Pollen Debug Info
+
+struct PollenDebugInfo {
+    let requestURL: String
+    let httpStatusCode: Int?
+    let responseBodyPreview: String
+    let decodingSucceeded: Bool
+    let forecastDaysParsed: Int
+    let error: String?
+    let timestamp: Date
 }
 
 // MARK: - Pollen API Service Protocol
@@ -26,6 +45,7 @@ enum PollenAPIError: LocalizedError {
 protocol PollenAPIServiceProtocol {
     func fetchForecast(for coordinate: CLLocationCoordinate2D, days: Int) async throws -> PollenForecast
     func fetchCurrentPollen(for coordinate: CLLocationCoordinate2D) async throws -> PollenSnapshot
+    var lastDebugInfo: PollenDebugInfo? { get }
 }
 
 // MARK: - Pollen API Service
@@ -34,22 +54,34 @@ final class PollenAPIService: PollenAPIServiceProtocol {
 
     private let session: URLSession
     private let apiKey: String
+    private(set) var lastDebugInfo: PollenDebugInfo?
 
     // Google Pollen API base URL
     private let baseURL = "https://pollen.googleapis.com/v1/forecast:lookup"
 
+    private static let placeholderKey = "YOUR_GOOGLE_POLLEN_API_KEY_HERE"
+
     init(session: URLSession = .shared) {
         self.session = session
-        // TODO: Move to xcconfig — do not commit real key
         self.apiKey = Bundle.main.infoDictionary?["GOOGLE_POLLEN_API_KEY"] as? String ?? ""
+        logger.info("PollenAPIService init — API key length: \(self.apiKey.count), isPlaceholder: \(self.apiKey == Self.placeholderKey)")
     }
 
     // MARK: - Fetch Forecast
 
     func fetchForecast(for coordinate: CLLocationCoordinate2D, days: Int = 5) async throws -> PollenForecast {
-        guard !apiKey.isEmpty else {
-            // Return mock data when API key is missing (development)
+        // Check for missing key
+        if apiKey.isEmpty {
+            logger.warning("API key is empty — returning mock data")
+            recordDebug(url: "N/A (no key)", status: nil, body: "Using mock data — API key empty", decoded: true, days: 5, error: "API key empty — using mock data")
             return MockDataProvider.mockPollenForecast(for: coordinate)
+        }
+
+        // Check for placeholder key
+        if apiKey == Self.placeholderKey {
+            logger.error("API key is still the placeholder value")
+            recordDebug(url: "N/A (placeholder key)", status: nil, body: "", decoded: false, days: 0, error: PollenAPIError.apiKeyPlaceholder.errorDescription)
+            throw PollenAPIError.apiKeyPlaceholder
         }
 
         var components = URLComponents(string: baseURL)!
@@ -66,15 +98,49 @@ final class PollenAPIService: PollenAPIServiceProtocol {
             throw PollenAPIError.invalidURL
         }
 
+        // Log the request (redact API key)
+        let redactedURL = url.absoluteString.replacingOccurrences(of: apiKey, with: "REDACTED")
+        logger.info("Pollen API request: \(redactedURL)")
+
         do {
-            let (data, _) = try await session.data(from: url)
-            let response = try JSONDecoder().decode(GooglePollenResponse.self, from: data)
-            return mapToForecast(response: response, coordinate: coordinate)
-        } catch let error as DecodingError {
-            throw PollenAPIError.decodingError(error)
+            let (data, response) = try await session.data(from: url)
+            let bodyString = String(data: data, encoding: .utf8) ?? "<binary>"
+
+            // Check HTTP status
+            let httpResponse = response as? HTTPURLResponse
+            let statusCode = httpResponse?.statusCode ?? -1
+            logger.info("Pollen API response: HTTP \(statusCode), body length: \(data.count)")
+            logger.debug("Pollen API body: \(bodyString.prefix(500))")
+
+            guard (200..<300).contains(statusCode) else {
+                let errorMsg = "HTTP \(statusCode)"
+                logger.error("Pollen API HTTP error: \(statusCode) — \(bodyString.prefix(300))")
+                recordDebug(url: redactedURL, status: statusCode, body: String(bodyString.prefix(500)), decoded: false, days: 0, error: errorMsg)
+                throw PollenAPIError.httpError(statusCode: statusCode, body: String(bodyString.prefix(500)))
+            }
+
+            // Decode with tolerance
+            let decoder = JSONDecoder()
+            let decoded: GooglePollenResponse
+            do {
+                decoded = try decoder.decode(GooglePollenResponse.self, from: data)
+            } catch {
+                logger.error("Pollen API decoding failed: \(error)")
+                logger.error("Response body was: \(bodyString.prefix(1000))")
+                recordDebug(url: redactedURL, status: statusCode, body: String(bodyString.prefix(500)), decoded: false, days: 0, error: "Decoding: \(error)")
+                throw PollenAPIError.decodingError(error, responseBody: String(bodyString.prefix(1000)))
+            }
+
+            let forecast = mapToForecast(response: decoded, coordinate: coordinate)
+            logger.info("Pollen API decoded OK: \(forecast.days.count) days, today risk: \(forecast.today?.overallRiskLevel.label ?? "N/A")")
+            recordDebug(url: redactedURL, status: statusCode, body: String(bodyString.prefix(300)), decoded: true, days: forecast.days.count, error: nil)
+            return forecast
+
         } catch let error as PollenAPIError {
             throw error
         } catch {
+            logger.error("Pollen API network error: \(error)")
+            recordDebug(url: redactedURL, status: nil, body: "", decoded: false, days: 0, error: "Network: \(error.localizedDescription)")
             throw PollenAPIError.networkError(error)
         }
     }
@@ -112,7 +178,7 @@ final class PollenAPIService: PollenAPIServiceProtocol {
                     category: category,
                     indexValue: indexValue,
                     riskLevel: riskLevel,
-                    displayName: typeInfo.displayName,
+                    displayName: typeInfo.displayName ?? typeInfo.code,
                     inSeason: typeInfo.inSeason ?? false
                 )
             }
@@ -144,5 +210,19 @@ final class PollenAPIService: PollenAPIServiceProtocol {
         case "VERY_HIGH": return .veryHigh
         default: return .none
         }
+    }
+
+    // MARK: - Debug
+
+    private func recordDebug(url: String, status: Int?, body: String, decoded: Bool, days: Int, error: String?) {
+        lastDebugInfo = PollenDebugInfo(
+            requestURL: url,
+            httpStatusCode: status,
+            responseBodyPreview: body,
+            decodingSucceeded: decoded,
+            forecastDaysParsed: days,
+            error: error,
+            timestamp: Date()
+        )
     }
 }
