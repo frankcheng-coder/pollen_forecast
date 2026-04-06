@@ -138,6 +138,12 @@ final class PollenAPIService: PollenAPIServiceProtocol {
 
         } catch let error as PollenAPIError {
             throw error
+        } catch is CancellationError {
+            logger.debug("Pollen API request cancelled")
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            logger.debug("Pollen API URLSession cancelled")
+            throw CancellationError()
         } catch {
             logger.error("Pollen API network error: \(error)")
             recordDebug(url: redactedURL, status: nil, body: "", decoded: false, days: 0, error: "Network: \(error.localizedDescription)")

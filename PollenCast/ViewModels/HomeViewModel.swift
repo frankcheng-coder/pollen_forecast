@@ -59,7 +59,8 @@ final class HomeViewModel: ObservableObject {
             }
             .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
             .sink { [weak self] location in
-                self?.startLoad(for: location.coordinate)
+                logger.info("Location update -> startLoad (\(location.coordinate.latitude), \(location.coordinate.longitude))")
+                self?.startLoad(for: location.coordinate, reason: "location-update")
             }
             .store(in: &cancellables)
 
@@ -81,17 +82,47 @@ final class HomeViewModel: ObservableObject {
 
     // MARK: - Load Coordination
 
-    /// Cancel any in-flight load and start a new one.
-    private func startLoad(for coordinate: CLLocationCoordinate2D) {
-        loadTask?.cancel()
-        loadTask = Task {
-            await loadData(for: coordinate)
+    /// The single entry point for all loads. Cancels any in-flight load first.
+    private func startLoad(for coordinate: CLLocationCoordinate2D, reason: String) {
+        if let existing = loadTask {
+            logger.info("Cancelling previous load (reason for new: \(reason))")
+            existing.cancel()
         }
+        loadTask = Task {
+            await loadData(for: coordinate, reason: reason)
+            // Clear the reference when done (only if this is still the active task)
+            if !Task.isCancelled {
+                loadTask = nil
+            }
+        }
+    }
+
+    // MARK: - Public Triggers
+
+    /// Called by pull-to-refresh via .refreshable. Returns when load completes.
+    func refresh() async {
+        guard let location = locationService.currentLocation else {
+            locationService.requestCurrentLocation()
+            return
+        }
+        logger.info("Pull-to-refresh -> startLoad")
+        // Cancel any in-flight load, start a new one, then await it
+        // so the refreshable spinner stays visible until completion.
+        startLoad(for: location.coordinate, reason: "pull-to-refresh")
+        // Await the task we just created
+        await loadTask?.value
+    }
+
+    func loadDataForLocation(_ item: LocationItem) async {
+        locationName = item.displayName
+        logger.info("Manual location select -> startLoad: \(item.name)")
+        startLoad(for: item.coordinate, reason: "manual-select")
+        await loadTask?.value
     }
 
     // MARK: - Load Data
 
-    private func loadData(for coordinate: CLLocationCoordinate2D) async {
+    private func loadData(for coordinate: CLLocationCoordinate2D, reason: String) async {
         isLoading = true
         pollenError = nil
 
@@ -102,9 +133,11 @@ final class HomeViewModel: ObservableObject {
 
         // If this task was cancelled mid-flight, don't touch published state
         guard !Task.isCancelled else {
-            logger.debug("Load cancelled — skipping state update")
+            logger.debug("Load (\(reason)) cancelled — skipping state update")
             return
         }
+
+        logger.info("Load (\(reason)) completed")
 
         // Only generate recommendation when we actually have pollen data
         recommendation = RecommendationEngine.generate(
@@ -119,26 +152,6 @@ final class HomeViewModel: ObservableObject {
         isLoading = false
     }
 
-    /// Called by pull-to-refresh. Coordinates with location-driven loads.
-    func refresh() async {
-        guard let location = locationService.currentLocation else {
-            locationService.requestCurrentLocation()
-            return
-        }
-        // Cancel any pending location-driven load, then run synchronously
-        // so the refreshable spinner waits for completion.
-        loadTask?.cancel()
-        loadTask = nil
-        await loadData(for: location.coordinate)
-    }
-
-    func loadDataForLocation(_ item: LocationItem) async {
-        locationName = item.displayName
-        loadTask?.cancel()
-        loadTask = nil
-        await loadData(for: item.coordinate)
-    }
-
     // MARK: - Private Loaders
 
     @discardableResult
@@ -147,7 +160,7 @@ final class HomeViewModel: ObservableObject {
             try Task.checkCancellation()
             let forecast = try await pollenService.fetchForecast(for: coordinate, days: 5)
 
-            // Check again after the await — task may have been cancelled while waiting
+            // Check again after the await
             guard !Task.isCancelled else { return false }
 
             pollenForecast = forecast
@@ -161,6 +174,7 @@ final class HomeViewModel: ObservableObject {
                     typeBreakdowns: today.typeBreakdowns,
                     dominantType: today.dominantType
                 )
+                logger.info("Pollen loaded: \(today.overallRiskLevel.label), \(forecast.days.count) days")
             } else {
                 pollenSnapshot = nil
                 pollenError = "Pollen API returned no daily data"
@@ -168,12 +182,11 @@ final class HomeViewModel: ObservableObject {
             }
             return true
         } catch is CancellationError {
-            logger.debug("Pollen request cancelled (superseded by newer load)")
-            return false
-        } catch let error as URLError where error.code == .cancelled {
-            logger.debug("Pollen URLSession request cancelled")
+            // Cancelled by a newer startLoad() — not an error
+            logger.debug("Pollen request cancelled (superseded)")
             return false
         } catch {
+            guard !Task.isCancelled else { return false }
             logger.error("Pollen load failed: \(error)")
             pollenSnapshot = nil
             pollenForecast = nil
@@ -190,9 +203,8 @@ final class HomeViewModel: ObservableObject {
             return true
         } catch is CancellationError {
             return false
-        } catch let error as URLError where error.code == .cancelled {
-            return false
         } catch {
+            guard !Task.isCancelled else { return false }
             return false
         }
     }
