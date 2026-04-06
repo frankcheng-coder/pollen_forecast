@@ -1,7 +1,17 @@
 import Foundation
 import CoreLocation
 import MapKit
-import Combine
+import OSLog
+
+private let logger = Logger(subsystem: "com.pollencast.app", category: "PollenMap")
+
+// MARK: - Pollen Grid Cell
+
+struct PollenGridCell: Identifiable {
+    let id = UUID()
+    let corners: [CLLocationCoordinate2D]
+    let riskLevel: PollenRiskLevel
+}
 
 // MARK: - Map View Model
 
@@ -10,23 +20,17 @@ final class MapViewModel: ObservableObject {
 
     // MARK: - Published State
 
-    @Published var region: MKCoordinateRegion = .defaultRegion
-    @Published var selectedPollen: PollenSnapshot?
-    @Published var selectionState: MapSelectionState = .currentLocation
-    @Published var savedLocations: [LocationItem] = []
-    @Published var isLoadingPollen = false
-    @Published var showBottomSheet = false
+    @Published var gridCells: [PollenGridCell] = []
+    @Published var isLoading = false
 
     // MARK: - Dependencies
 
     private let locationService: LocationService
     private let pollenService: PollenAPIServiceProtocol
-    private let cacheService: CacheService
-    private var cancellables = Set<AnyCancellable>()
-    private var lastFetchedCoordinate: CLLocationCoordinate2D?
+    private var loadTask: Task<Void, Never>?
+    private var lastSampledRegion: MKCoordinateRegion?
 
-    /// Minimum distance to trigger a new pollen fetch from map movement
-    private let fetchDistanceThreshold: CLLocationDistance = 5000 // 5km
+    private let gridSize = 4 // 4×4 = 16 cells
 
     // MARK: - Init
 
@@ -37,88 +41,93 @@ final class MapViewModel: ObservableObject {
     ) {
         self.locationService = locationService
         self.pollenService = pollenService
-        self.cacheService = cacheService
-
-        savedLocations = cacheService.loadSavedLocations()
-        observeLocation()
     }
 
-    // MARK: - Observe Location
+    // MARK: - Initial Location
 
-    private func observeLocation() {
-        locationService.$currentLocation
-            .compactMap { $0 }
-            .first() // Only auto-center once
-            .sink { [weak self] location in
-                self?.centerOnLocation(location.coordinate)
-                Task { [weak self] in
-                    await self?.fetchPollenForCoordinate(location.coordinate)
-                }
-            }
-            .store(in: &cancellables)
+    var initialCoordinate: CLLocationCoordinate2D {
+        locationService.currentLocation?.coordinate ?? .sanFrancisco
     }
 
-    // MARK: - Map Actions
+    // MARK: - Region Changed
 
-    func centerOnCurrentLocation() {
-        guard let location = locationService.currentLocation else { return }
-        centerOnLocation(location.coordinate)
-        selectionState = .currentLocation
-        Task {
-            await fetchPollenForCoordinate(location.coordinate)
-        }
-    }
+    func onRegionChanged(_ region: MKCoordinateRegion) {
+        // Skip if region hasn't moved meaningfully since last sample
+        if let last = lastSampledRegion {
+            let latShift = abs(last.center.latitude - region.center.latitude)
+            let lonShift = abs(last.center.longitude - region.center.longitude)
+            let zoomChange = abs(last.span.latitudeDelta - region.span.latitudeDelta)
+                / max(last.span.latitudeDelta, 0.001)
 
-    func centerOnLocation(_ coordinate: CLLocationCoordinate2D) {
-        region = MKCoordinateRegion(
-            center: coordinate,
-            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
-        )
-    }
-
-    func selectSavedLocation(_ location: LocationItem) {
-        centerOnLocation(location.coordinate)
-        selectionState = .savedLocation(location)
-        Task {
-            await fetchPollenForCoordinate(location.coordinate)
-        }
-    }
-
-    func handleMapTap(at coordinate: CLLocationCoordinate2D) {
-        selectionState = .customPoint(coordinate)
-        Task {
-            await fetchPollenForCoordinate(coordinate)
-        }
-    }
-
-    // MARK: - Fetch Pollen
-
-    func fetchPollenForCoordinate(_ coordinate: CLLocationCoordinate2D) async {
-        // Debounce: skip if too close to last fetch
-        if let last = lastFetchedCoordinate {
-            let lastLocation = CLLocation(latitude: last.latitude, longitude: last.longitude)
-            let newLocation = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
-            if lastLocation.distance(from: newLocation) < fetchDistanceThreshold && selectedPollen != nil {
+            if latShift < region.span.latitudeDelta * 0.15
+                && lonShift < region.span.longitudeDelta * 0.15
+                && zoomChange < 0.3 {
                 return
             }
         }
 
-        isLoadingPollen = true
-        lastFetchedCoordinate = coordinate
-
-        do {
-            let snapshot = try await pollenService.fetchCurrentPollen(for: coordinate)
-            selectedPollen = snapshot
-            showBottomSheet = true
-        } catch {
-            // Keep showing previous data if available
+        loadTask?.cancel()
+        loadTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            await sampleGrid(for: region)
         }
-
-        isLoadingPollen = false
     }
 
-    func refreshSavedLocations() {
-        savedLocations = cacheService.loadSavedLocations()
+    // MARK: - Grid Sampling
+
+    private func sampleGrid(for region: MKCoordinateRegion) async {
+        isLoading = true
+        lastSampledRegion = region
+
+        let minLat = region.center.latitude - region.span.latitudeDelta / 2
+        let minLon = region.center.longitude - region.span.longitudeDelta / 2
+        let latStep = region.span.latitudeDelta / Double(gridSize)
+        let lonStep = region.span.longitudeDelta / Double(gridSize)
+        let size = gridSize
+        let service = pollenService
+
+        var cells: [PollenGridCell] = []
+
+        await withTaskGroup(of: PollenGridCell?.self) { group in
+            for row in 0..<size {
+                for col in 0..<size {
+                    group.addTask {
+                        let cellMinLat = minLat + Double(row) * latStep
+                        let cellMinLon = minLon + Double(col) * lonStep
+
+                        let corners = [
+                            CLLocationCoordinate2D(latitude: cellMinLat, longitude: cellMinLon),
+                            CLLocationCoordinate2D(latitude: cellMinLat + latStep, longitude: cellMinLon),
+                            CLLocationCoordinate2D(latitude: cellMinLat + latStep, longitude: cellMinLon + lonStep),
+                            CLLocationCoordinate2D(latitude: cellMinLat, longitude: cellMinLon + lonStep),
+                        ]
+                        let center = CLLocationCoordinate2D(
+                            latitude: cellMinLat + latStep / 2,
+                            longitude: cellMinLon + lonStep / 2
+                        )
+
+                        do {
+                            let snapshot = try await service.fetchCurrentPollen(for: center)
+                            return PollenGridCell(corners: corners, riskLevel: snapshot.overallRiskLevel)
+                        } catch is CancellationError {
+                            return nil
+                        } catch {
+                            return PollenGridCell(corners: corners, riskLevel: .none)
+                        }
+                    }
+                }
+            }
+
+            for await cell in group {
+                if let cell { cells.append(cell) }
+            }
+        }
+
+        guard !Task.isCancelled else { return }
+        gridCells = cells
+        isLoading = false
+        logger.info("Heatmap updated: \(cells.count) cells")
     }
 }
 

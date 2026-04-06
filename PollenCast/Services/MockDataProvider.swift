@@ -22,12 +22,16 @@ enum MockDataProvider {
     }
 
     static func mockPollenForecast(for coordinate: CLLocationCoordinate2D = .sanFrancisco) -> PollenForecast {
+        // Use coordinate to create spatial variation for realistic mock heatmap
+        let spatialHash = sin(coordinate.latitude * 7.3) * cos(coordinate.longitude * 11.7)
+        let normalized = (spatialHash + 1) / 2 // 0…1
+        let baseIndex = min(5, Int(normalized * 6))
+
         let days = (0..<5).map { offset -> PollenDay in
             let date = Calendar.current.date(byAdding: .day, value: offset, to: Date())!
-            let risks: [PollenRiskLevel] = [.high, .moderate, .high, .low, .moderate]
-            let indices = [3, 2, 3, 1, 2]
-            let risk = risks[offset]
-            let index = indices[offset]
+            let variation = [0, -1, 1, -1, 0][offset]
+            let index = max(0, min(5, baseIndex + variation))
+            let risk = PollenRiskLevel.from(index: index)
 
             return PollenDay(
                 date: date,
