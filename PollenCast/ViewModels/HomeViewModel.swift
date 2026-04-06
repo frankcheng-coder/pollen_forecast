@@ -22,6 +22,12 @@ final class HomeViewModel: ObservableObject {
     @Published var lastUpdated: Date?
     @Published var debugInfo: PollenDebugInfo?
 
+    /// When non-nil, Home is showing a saved/manual location and GPS updates are ignored.
+    @Published var pinnedLocation: LocationItem?
+
+    /// True when Home is showing a pinned saved location rather than live GPS.
+    var isShowingPinnedLocation: Bool { pinnedLocation != nil }
+
     // MARK: - Dependencies
 
     private let locationService: LocationService
@@ -59,15 +65,24 @@ final class HomeViewModel: ObservableObject {
             }
             .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
             .sink { [weak self] location in
+                guard let self else { return }
+                // Don't overwrite a pinned saved location with GPS
+                guard self.pinnedLocation == nil else {
+                    logger.debug("GPS update ignored — showing pinned location")
+                    return
+                }
                 logger.info("Location update -> startLoad (\(location.coordinate.latitude), \(location.coordinate.longitude))")
-                self?.startLoad(for: location.coordinate, reason: "location-update")
+                self.startLoad(for: location.coordinate, reason: "location-update")
             }
             .store(in: &cancellables)
 
         locationService.$currentPlacemark
             .compactMap { $0 }
             .sink { [weak self] placemark in
-                self?.locationName = placemark.locality ?? placemark.name ?? "Current Location"
+                guard let self else { return }
+                // Don't overwrite the header when showing a pinned location
+                guard self.pinnedLocation == nil else { return }
+                self.locationName = placemark.locality ?? placemark.name ?? "Current Location"
             }
             .store(in: &cancellables)
 
@@ -90,7 +105,6 @@ final class HomeViewModel: ObservableObject {
         }
         loadTask = Task {
             await loadData(for: coordinate, reason: reason)
-            // Clear the reference when done (only if this is still the active task)
             if !Task.isCancelled {
                 loadTask = nil
             }
@@ -99,25 +113,48 @@ final class HomeViewModel: ObservableObject {
 
     // MARK: - Public Triggers
 
-    /// Called by pull-to-refresh via .refreshable. Returns when load completes.
+    /// Called by pull-to-refresh. Reloads whichever location Home is currently showing.
     func refresh() async {
-        guard let location = locationService.currentLocation else {
+        let coordinate: CLLocationCoordinate2D
+        if let pinned = pinnedLocation {
+            coordinate = pinned.coordinate
+            logger.info("Pull-to-refresh -> reload pinned: \(pinned.name)")
+        } else if let location = locationService.currentLocation {
+            coordinate = location.coordinate
+            logger.info("Pull-to-refresh -> reload current location")
+        } else {
             locationService.requestCurrentLocation()
             return
         }
-        logger.info("Pull-to-refresh -> startLoad")
-        // Cancel any in-flight load, start a new one, then await it
-        // so the refreshable spinner stays visible until completion.
-        startLoad(for: location.coordinate, reason: "pull-to-refresh")
-        // Await the task we just created
+        startLoad(for: coordinate, reason: "pull-to-refresh")
         await loadTask?.value
     }
 
+    /// Called when user taps a saved location. Pins it and loads its data.
     func loadDataForLocation(_ item: LocationItem) async {
+        pinnedLocation = item
         locationName = item.displayName
-        logger.info("Manual location select -> startLoad: \(item.name)")
-        startLoad(for: item.coordinate, reason: "manual-select")
+        logger.info("Pinned location -> startLoad: \(item.name)")
+        startLoad(for: item.coordinate, reason: "saved-location")
         await loadTask?.value
+    }
+
+    /// Called when user wants to go back to live GPS location.
+    func switchToCurrentLocation() {
+        pinnedLocation = nil
+        logger.info("Switched back to current location")
+        if let location = locationService.currentLocation {
+            // Update header from placemark
+            if let placemark = locationService.currentPlacemark {
+                locationName = placemark.locality ?? placemark.name ?? "Current Location"
+            } else {
+                locationName = "Current Location"
+            }
+            startLoad(for: location.coordinate, reason: "switch-to-current")
+        } else {
+            locationName = "Loading..."
+            locationService.requestCurrentLocation()
+        }
     }
 
     // MARK: - Load Data
@@ -131,7 +168,6 @@ final class HomeViewModel: ObservableObject {
 
         let (_, _) = await (pollenResult, weatherResult)
 
-        // If this task was cancelled mid-flight, don't touch published state
         guard !Task.isCancelled else {
             logger.debug("Load (\(reason)) cancelled — skipping state update")
             return
@@ -139,15 +175,12 @@ final class HomeViewModel: ObservableObject {
 
         logger.info("Load (\(reason)) completed")
 
-        // Only generate recommendation when we actually have pollen data
         recommendation = RecommendationEngine.generate(
             pollen: pollenSnapshot,
             weather: weatherContext
         )
 
-        // Update debug info from service
         debugInfo = pollenService.lastDebugInfo
-
         lastUpdated = Date()
         isLoading = false
     }
@@ -160,7 +193,6 @@ final class HomeViewModel: ObservableObject {
             try Task.checkCancellation()
             let forecast = try await pollenService.fetchForecast(for: coordinate, days: 5)
 
-            // Check again after the await
             guard !Task.isCancelled else { return false }
 
             pollenForecast = forecast
@@ -182,7 +214,6 @@ final class HomeViewModel: ObservableObject {
             }
             return true
         } catch is CancellationError {
-            // Cancelled by a newer startLoad() — not an error
             logger.debug("Pollen request cancelled (superseded)")
             return false
         } catch {

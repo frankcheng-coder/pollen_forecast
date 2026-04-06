@@ -107,12 +107,29 @@ struct HomeView: View {
 
     private var locationHeader: some View {
         HStack {
-            Image(systemName: "location.fill")
+            Image(systemName: viewModel.isShowingPinnedLocation ? "mappin.circle.fill" : "location.fill")
                 .font(.caption)
-                .foregroundStyle(.blue)
+                .foregroundStyle(viewModel.isShowingPinnedLocation ? .orange : .blue)
             Text(viewModel.locationName)
                 .font(.subheadline.weight(.medium))
             Spacer()
+            if viewModel.isShowingPinnedLocation {
+                Button {
+                    viewModel.switchToCurrentLocation()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "location.fill")
+                            .font(.caption2)
+                        Text("My Location")
+                            .font(.caption2)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.blue.opacity(0.1), in: Capsule())
+                }
+                .foregroundStyle(.blue)
+                .accessibilityLabel("Switch back to current location")
+            }
         }
         .accessibilityLabel("Location: \(viewModel.locationName)")
     }

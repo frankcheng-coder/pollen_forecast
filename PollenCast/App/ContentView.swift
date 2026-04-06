@@ -8,6 +8,9 @@ struct ContentView: View {
     @State private var showDetail = false
     @State private var detailViewModel: DetailViewModel?
 
+    // Shared HomeViewModel so Locations tab can call loadDataForLocation
+    @State private var homeViewModel: HomeViewModel?
+
     var body: some View {
         TabView(selection: $selectedTab) {
             // Home Tab
@@ -59,6 +62,9 @@ struct ContentView: View {
     private var homeTab: some View {
         HomeTabWrapper(
             locationService: locationService,
+            onViewModelReady: { vm in
+                homeViewModel = vm
+            },
             onDaySelected: { day, weather, locationName in
                 let vm = DetailViewModel(locationName: locationName)
                 vm.loadDetail(for: day, weather: weather)
@@ -70,8 +76,13 @@ struct ContentView: View {
 
     private var locationsTab: some View {
         LocationsTabWrapper(
-            locationService: locationService,
-            onSelectTab: { selectedTab = $0 }
+            onLocationSelected: { location in
+                guard let homeVM = homeViewModel else { return }
+                Task {
+                    await homeVM.loadDataForLocation(location)
+                }
+                selectedTab = 0
+            }
         )
     }
 }
@@ -80,12 +91,18 @@ struct ContentView: View {
 
 private struct HomeTabWrapper: View {
     let locationService: LocationService
+    let onViewModelReady: (HomeViewModel) -> Void
     let onDaySelected: (PollenDay, DailyWeather?, String) -> Void
 
     @StateObject private var viewModel: HomeViewModel
 
-    init(locationService: LocationService, onDaySelected: @escaping (PollenDay, DailyWeather?, String) -> Void) {
+    init(
+        locationService: LocationService,
+        onViewModelReady: @escaping (HomeViewModel) -> Void,
+        onDaySelected: @escaping (PollenDay, DailyWeather?, String) -> Void
+    ) {
         self.locationService = locationService
+        self.onViewModelReady = onViewModelReady
         self.onDaySelected = onDaySelected
         _viewModel = StateObject(wrappedValue: HomeViewModel(locationService: locationService))
     }
@@ -98,24 +115,23 @@ private struct HomeTabWrapper: View {
                 onDaySelected(day, weather, viewModel.locationName)
             }
         )
+        .onAppear {
+            onViewModelReady(viewModel)
+        }
     }
 }
 
 // MARK: - Locations Tab Wrapper
 
 private struct LocationsTabWrapper: View {
-    let locationService: LocationService
-    let onSelectTab: (Int) -> Void
+    let onLocationSelected: (LocationItem) -> Void
 
     @StateObject private var viewModel = SavedLocationsViewModel()
 
     var body: some View {
         SavedLocationsView(
             viewModel: viewModel,
-            onLocationSelected: { location in
-                // Switch to home tab when a location is selected
-                onSelectTab(0)
-            }
+            onLocationSelected: onLocationSelected
         )
     }
 }
