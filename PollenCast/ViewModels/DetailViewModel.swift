@@ -18,7 +18,7 @@ final class DetailViewModel: ObservableObject {
     init(
         locationName: String,
         pollenService: PollenAPIServiceProtocol = PollenAPIService(),
-        weatherService: WeatherServiceProtocol = MockWeatherService()
+        weatherService: WeatherServiceProtocol = WeatherKitService()
     ) {
         self.locationName = locationName
         self.pollenService = pollenService

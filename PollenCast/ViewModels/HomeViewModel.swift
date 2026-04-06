@@ -44,7 +44,7 @@ final class HomeViewModel: ObservableObject {
     init(
         locationService: LocationService,
         pollenService: PollenAPIServiceProtocol = PollenAPIService(),
-        weatherService: WeatherServiceProtocol = MockWeatherService(),
+        weatherService: WeatherServiceProtocol = WeatherKitService(),
         cacheService: CacheService = .shared
     ) {
         self.locationService = locationService

@@ -1,6 +1,9 @@
 import Foundation
 import WeatherKit
 import CoreLocation
+import OSLog
+
+private let logger = Logger(subsystem: "com.pollencast.app", category: "Weather")
 
 // MARK: - WeatherKit Error
 
@@ -28,6 +31,10 @@ protocol WeatherServiceProtocol {
 final class WeatherKitService: WeatherServiceProtocol {
 
     private let weatherService = WeatherService.shared
+
+    init() {
+        logger.info("WeatherKitService (live Apple WeatherKit) initialized")
+    }
 
     // MARK: - Fetch Current Weather
 
@@ -77,6 +84,10 @@ final class WeatherKitService: WeatherServiceProtocol {
 // MARK: - Mock Weather Service (for development without WeatherKit entitlement)
 
 final class MockWeatherService: WeatherServiceProtocol {
+
+    init() {
+        logger.warning("MockWeatherService initialized — weather data will be static/fake")
+    }
 
     func fetchCurrentWeather(for coordinate: CLLocationCoordinate2D) async throws -> WeatherContext {
         MockDataProvider.mockWeatherContext()
