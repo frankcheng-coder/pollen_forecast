@@ -30,6 +30,9 @@ final class HomeViewModel: ObservableObject {
     private let cacheService: CacheService
     private var cancellables = Set<AnyCancellable>()
 
+    /// Single active load task — cancelled before starting a new one.
+    private var loadTask: Task<Void, Never>?
+
     // MARK: - Init
 
     init(
@@ -54,10 +57,9 @@ final class HomeViewModel: ObservableObject {
             .removeDuplicates { old, new in
                 old.distance(from: new) < 500
             }
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
             .sink { [weak self] location in
-                Task { [weak self] in
-                    await self?.loadData(for: location.coordinate)
-                }
+                self?.startLoad(for: location.coordinate)
             }
             .store(in: &cancellables)
 
@@ -77,9 +79,19 @@ final class HomeViewModel: ObservableObject {
             .store(in: &cancellables)
     }
 
+    // MARK: - Load Coordination
+
+    /// Cancel any in-flight load and start a new one.
+    private func startLoad(for coordinate: CLLocationCoordinate2D) {
+        loadTask?.cancel()
+        loadTask = Task {
+            await loadData(for: coordinate)
+        }
+    }
+
     // MARK: - Load Data
 
-    func loadData(for coordinate: CLLocationCoordinate2D) async {
+    private func loadData(for coordinate: CLLocationCoordinate2D) async {
         isLoading = true
         pollenError = nil
 
@@ -87,6 +99,12 @@ final class HomeViewModel: ObservableObject {
         async let weatherResult = loadWeather(for: coordinate)
 
         let (_, _) = await (pollenResult, weatherResult)
+
+        // If this task was cancelled mid-flight, don't touch published state
+        guard !Task.isCancelled else {
+            logger.debug("Load cancelled — skipping state update")
+            return
+        }
 
         // Only generate recommendation when we actually have pollen data
         recommendation = RecommendationEngine.generate(
@@ -101,16 +119,23 @@ final class HomeViewModel: ObservableObject {
         isLoading = false
     }
 
+    /// Called by pull-to-refresh. Coordinates with location-driven loads.
     func refresh() async {
         guard let location = locationService.currentLocation else {
             locationService.requestCurrentLocation()
             return
         }
+        // Cancel any pending location-driven load, then run synchronously
+        // so the refreshable spinner waits for completion.
+        loadTask?.cancel()
+        loadTask = nil
         await loadData(for: location.coordinate)
     }
 
     func loadDataForLocation(_ item: LocationItem) async {
         locationName = item.displayName
+        loadTask?.cancel()
+        loadTask = nil
         await loadData(for: item.coordinate)
     }
 
@@ -119,7 +144,12 @@ final class HomeViewModel: ObservableObject {
     @discardableResult
     private func loadPollen(for coordinate: CLLocationCoordinate2D) async -> Bool {
         do {
+            try Task.checkCancellation()
             let forecast = try await pollenService.fetchForecast(for: coordinate, days: 5)
+
+            // Check again after the await — task may have been cancelled while waiting
+            guard !Task.isCancelled else { return false }
+
             pollenForecast = forecast
 
             if let today = forecast.today {
@@ -137,6 +167,12 @@ final class HomeViewModel: ObservableObject {
                 logger.warning("Pollen forecast had 0 days")
             }
             return true
+        } catch is CancellationError {
+            logger.debug("Pollen request cancelled (superseded by newer load)")
+            return false
+        } catch let error as URLError where error.code == .cancelled {
+            logger.debug("Pollen URLSession request cancelled")
+            return false
         } catch {
             logger.error("Pollen load failed: \(error)")
             pollenSnapshot = nil
@@ -149,8 +185,13 @@ final class HomeViewModel: ObservableObject {
     @discardableResult
     private func loadWeather(for coordinate: CLLocationCoordinate2D) async -> Bool {
         do {
+            try Task.checkCancellation()
             weatherContext = try await weatherService.fetchCurrentWeather(for: coordinate)
             return true
+        } catch is CancellationError {
+            return false
+        } catch let error as URLError where error.code == .cancelled {
+            return false
         } catch {
             return false
         }
