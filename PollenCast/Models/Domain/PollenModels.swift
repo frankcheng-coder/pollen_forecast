@@ -5,14 +5,16 @@ import CoreLocation
 
 enum PollenRiskLevel: Int, Comparable, CaseIterable {
     case none = 0
-    case low = 1
-    case moderate = 2
-    case high = 3
-    case veryHigh = 4
+    case veryLow = 1
+    case low = 2
+    case moderate = 3
+    case high = 4
+    case veryHigh = 5
 
     var label: String {
         switch self {
         case .none: return "None"
+        case .veryLow: return "Very Low"
         case .low: return "Low"
         case .moderate: return "Moderate"
         case .high: return "High"
@@ -23,6 +25,7 @@ enum PollenRiskLevel: Int, Comparable, CaseIterable {
     var emoji: String {
         switch self {
         case .none: return "checkmark.circle.fill"
+        case .veryLow: return "leaf.fill"
         case .low: return "leaf.fill"
         case .moderate: return "exclamationmark.triangle.fill"
         case .high: return "exclamationmark.triangle.fill"
@@ -37,9 +40,10 @@ enum PollenRiskLevel: Int, Comparable, CaseIterable {
     static func from(index: Int) -> PollenRiskLevel {
         switch index {
         case 0: return .none
-        case 1: return .low
-        case 2: return .moderate
-        case 3: return .high
+        case 1: return .veryLow
+        case 2: return .low
+        case 3: return .moderate
+        case 4: return .high
         default: return .veryHigh
         }
     }
@@ -136,6 +140,8 @@ struct PollenSnapshot {
         switch overallRiskLevel {
         case .none:
             return "No significant pollen detected. Great conditions for outdoor activities."
+        case .veryLow:
+            return "\(typeText) is present at very low levels. Enjoy the outdoors."
         case .low:
             return "\(typeText) is present at low levels. Most people should be comfortable outdoors."
         case .moderate:

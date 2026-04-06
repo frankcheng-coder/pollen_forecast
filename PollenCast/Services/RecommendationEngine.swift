@@ -30,12 +30,12 @@ struct RecommendationEngine {
 
     private static func computeRating(pollen: PollenRiskLevel, isWindy: Bool, isRainy: Bool) -> OutdoorRating {
         switch pollen {
-        case .none:
+        case .none, .veryLow:
             return .great
         case .low:
             return isWindy ? .good : .great
         case .moderate:
-            if isRainy { return .good } // Rain washes pollen
+            if isRainy { return .good }
             return isWindy ? .fair : .good
         case .high:
             if isRainy { return .fair }
@@ -90,7 +90,7 @@ struct RecommendationEngine {
 
         // Severity-based
         switch risk {
-        case .none:
+        case .none, .veryLow:
             details.append("No significant pollen detected. Enjoy the outdoors freely.")
         case .low:
             details.append("Most people should be comfortable. Those with severe allergies may want to monitor.")
@@ -111,8 +111,8 @@ struct RecommendationEngine {
 
     private static func computeBestTime(pollenRisk: PollenRiskLevel, isRainy: Bool) -> String? {
         switch pollenRisk {
-        case .none, .low:
-            return nil // No need for timing advice
+        case .none, .veryLow, .low:
+            return nil
         case .moderate:
             return isRainy ? "After the rain may be a good window" : "Early morning or evening tends to be better"
         case .high, .veryHigh:

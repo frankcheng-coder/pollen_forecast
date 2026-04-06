@@ -208,13 +208,23 @@ final class PollenAPIService: PollenAPIServiceProtocol {
     }
 
     private func mapCategoryToRisk(_ category: String?) -> PollenRiskLevel {
-        switch category?.uppercased() {
-        case "NONE", .none: return .none
-        case "LOW": return .low
-        case "MODERATE": return .moderate
-        case "HIGH": return .high
-        case "VERY_HIGH": return .veryHigh
-        default: return .none
+        // Normalize: trim, lowercase, collapse whitespace/underscores/hyphens
+        let normalized = (category ?? "")
+            .trimmingCharacters(in: .whitespaces)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+
+        switch normalized {
+        case "", "none":       return .none
+        case "very low":       return .veryLow
+        case "low":            return .low
+        case "moderate":       return .moderate
+        case "high":           return .high
+        case "very high":      return .veryHigh
+        default:
+            logger.warning("Unknown pollen category: \(category ?? "nil")")
+            return .none
         }
     }
 

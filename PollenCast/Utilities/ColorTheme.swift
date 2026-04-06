@@ -6,6 +6,7 @@ extension PollenRiskLevel {
     var color: Color {
         switch self {
         case .none: return .green
+        case .veryLow: return .green
         case .low: return .green
         case .moderate: return .yellow
         case .high: return .orange
@@ -19,7 +20,7 @@ extension PollenRiskLevel {
 
     var gradientColors: [Color] {
         switch self {
-        case .none: return [.green.opacity(0.3), .green.opacity(0.1)]
+        case .none, .veryLow: return [.green.opacity(0.3), .green.opacity(0.1)]
         case .low: return [.green.opacity(0.3), .green.opacity(0.1)]
         case .moderate: return [.yellow.opacity(0.3), .orange.opacity(0.1)]
         case .high: return [.orange.opacity(0.3), .red.opacity(0.1)]
