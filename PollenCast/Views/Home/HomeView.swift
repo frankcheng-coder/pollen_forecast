@@ -5,7 +5,9 @@ struct HomeView: View {
     @ObservedObject var locationService: LocationService
     var onDaySelected: ((PollenDay, DailyWeather?) -> Void)?
 
+    #if DEBUG
     @State private var showDebugPanel = false
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -30,7 +32,7 @@ struct HomeView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 8) {
-                        // Debug toggle (tap the clock icon)
+                        #if DEBUG
                         Button {
                             showDebugPanel.toggle()
                         } label: {
@@ -38,6 +40,7 @@ struct HomeView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        #endif
 
                         if viewModel.isLoading {
                             ProgressView()
@@ -66,9 +69,11 @@ struct HomeView: View {
                 }
 
                 // Debug panel
+                #if DEBUG
                 if showDebugPanel {
                     PollenDebugPanel(debugInfo: viewModel.debugInfo)
                 }
+                #endif
 
                 // Pollen risk card
                 PollenRiskCard(snapshot: viewModel.pollenSnapshot)
