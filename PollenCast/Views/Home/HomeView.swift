@@ -78,9 +78,6 @@ struct HomeView: View {
                 // Pollen risk card
                 PollenRiskCard(snapshot: viewModel.pollenSnapshot)
 
-                // Weather context row
-                WeatherContextRow(weather: viewModel.weatherContext)
-
                 // 5-day forecast
                 ForecastSection(
                     forecast: viewModel.pollenForecast,
