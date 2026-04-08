@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var locationService: LocationService
+    @StateObject private var subscriptionService = SubscriptionService.shared
     @State private var selectedTab = 0
 
     // Detail navigation
@@ -20,11 +21,17 @@ struct ContentView: View {
                 }
                 .tag(0)
 
-            // Map Tab
-            MapScreenView(
-                viewModel: MapViewModel(locationService: locationService),
-                locationService: locationService
-            )
+            // Map Tab — gated by subscription
+            Group {
+                if subscriptionService.isSubscribed {
+                    MapScreenView(
+                        viewModel: MapViewModel(locationService: locationService),
+                        locationService: locationService
+                    )
+                } else {
+                    MapPaywallView(subscriptionService: subscriptionService)
+                }
+            }
             .tabItem {
                 Label("Map", systemImage: "map.fill")
             }
